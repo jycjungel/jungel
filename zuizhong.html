@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>在地图上添加时间滑块控制图层和图表</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #menu {
+            position: absolute;
+            background: white;
+            padding: 10px;
+            top: 10px;
+            right: 10px;
+            z-index: 1;
+        }
+        #menu label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        #slider {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            z-index: 1;
+        }
+        #sidebar {
+            width: 500px;
+            position: absolute;
+            top: 0;
+            left: -500px;
+            background-color: #fff;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+            z-index: 1000;
+            transition: left 0.3s;
+            padding-bottom: 10px;
+        }
+        #sidebar.open {
+            left: 0;
+        }
+        #sidebar-header {
+            padding: 10px;
+            background-color: #007BFF;
+            color: #fff;
+            text-align: center;
+        }
+        #chart {
+            width: 500px;
+            height: 400px;
+        }
+        #toggle-sidebar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 5px 10px;
+            border: none;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        #toggle-buttons {
+            position: absolute;
+            top: 90px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            z-index: 1;
+        }
+        #toggle-buttons button {
+            display: block;
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        #toggle-city-layer {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            background: white;
+            padding: 5px 10px;
+            border: none;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        #chart-container {
+            width: 300px;
+            height: 300px;
+            min-width: 200px;
+            min-height: 200px;
+            overflow: visible;
+            background-color: transparent; /* 设置背景透明 */
+            border: none; /* 移除边框 */
+        }
+        svg {
+            display: block;
+            margin: auto;
+        }
+        .tooltip {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px;
+            border-radius: 5px;
+            pointer-events: none;
+            display: none;
+            z-index: 10000;
+        }
+    </style>
+</head>
+<body>
+<div id="menu">
+    <label for="layer1"><input id="layer1" type="checkbox" checked /> 玉米</label>
+    <label for="layer2"><input id="layer2" type="checkbox" checked /> 水稻</label>
+    <label for="layer3"><input id="layer3" type="checkbox" checked /> 小麦</label>
+</div>
+<button id="toggle-city-layer">荆门市</button>
+<div id="toggle-buttons">
+    <button id="toggle-tileset-layer">切换Tileset图层</button>
+    <button id="toggle-geojson-layer">切换GeoJSON图层</button>
+    <button id="toggle-geojson-layer2">切换第二GeoJSON图层</button>
+</div>
+<button id="toggle-sidebar">显示/隐藏图表</button>
+<div id="map"></div>
+<input id="slider" type="range" min="2016" max="2020" step="1" value="2016">
+
+<div id="sidebar">
+    <div id="sidebar-header">2016 Lorenz Curve</div>
+    <div id="chart"></div>
+</div>
+
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg';
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/dark-v11',
+        center: [111.7127281, 30.0060152],
+        zoom: 5,
+        maxZoom: 10
+    });
+
+    const layers = {
+        '2016': {
+            '玉米': 'https://api.mapbox.com/v4/ask345.0hww2sye/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '水稻': 'https://api.mapbox.com/v4/ask345.2q4mc3jp/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '小麦': 'https://api.mapbox.com/v4/ask345.buwdeuqt/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg'
+        },
+        '2017': {
+            '玉米': 'https://api.mapbox.com/v4/ask345.86vetqh3/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '水稻': 'https://api.mapbox.com/v4/ask345.64y8bmmp/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '小麦': 'https://api.mapbox.com/v4/ask345.82ghmgf4/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg'
+        },
+        '2018': {
+            '玉米': 'https://api.mapbox.com/v4/ask345.2sa7d4dl/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '水稻': 'https://api.mapbox.com/v4/ask345.8r9meuob/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '小麦': 'https://api.mapbox.com/v4/ask345.b5n1z3tz/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg'
+        },
+        '2019': {
+            '玉米': 'https://api.mapbox.com/v4/ask345.3y1x2lek/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '水稻': 'https://api.mapbox.com/v4/ask345.62oqfon0/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '小麦': 'https://api.mapbox.com/v4/ask345.bx6f1fzc/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg'
+        },
+        '2020': {
+            '玉米': 'https://api.mapbox.com/v4/ask345.194wwqz5/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '水稻': 'https://api.mapbox.com/v4/ask345.b7gmclcv/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg',
+            '小麦': 'https://api.mapbox.com/v4/ask345.879gotqc/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXNrMzQ1IiwiYSI6ImNsdzUwM2xpZzFpY2YycnBkanJ5b2xycTkifQ.OZAwL2_iZ1reNqW0U9rfjg'
+        }
+    };
+
+    const layerColors = {
+        '玉米': 'red',
+        '水稻': 'green',
+        '小麦': 'yellow'
+    };
+
+    const cityData2016 = {
+        "420802": {
+            "paddy rice": [
+                { "yield": 78158, "area": 11.55 },
+            ],
+            "winter wheat": [
+                { "yield": 25672, "area": 6.26 },
+            ],
+            "maize": [
+                { "yield": 15714, "area": 1.89 },
+            ]
+        },
+        "420804": {
+            "paddy rice": [
+                { "yield": 67658, "area": 8.86 },
+            ],
+            "winter wheat": [
+                { "yield": 7032, "area": 1.23 },
+            ],
+            "maize": [
+                { "yield": 2502, "area": 0.50 },
+            ]
+        },
+        "420822": {
+            "paddy rice": [
+                { "yield": 509939, "area": 54.62 },
+            ],
+            "winter wheat": [
+                { "yield": 98861, "area": 20.30 },
+            ],
+            "maize": [
+                { "yield": 31220, "area": 5.27 },
+            ]
+        },
+        "420881": {
+            "paddy rice": [
+                { "yield": 524034, "area": 47.35 },
+            ],
+            "winter wheat": [
+                { "yield": 166999, "area": 36.14 },
+            ],
+            "maize": [
+                { "yield": 75154, "area": 15.60 },
+            ]
+        },
+        "420882": {
+            "paddy rice": [
+                { "yield": 397782, "area": 51.26 },
+            ],
+            "winter wheat": [
+                { "yield": 125177, "area": 35.70 },
+            ],
+            "maize": [
+                { "yield": 66914, "area": 10.40 },
+            ]
+        }
+    };
+
+    const cityData2017 = {
+        "420802": {
+            "paddy rice": [
+                { "yield": 80219, "area": 11.48 },
+            ],
+            "winter wheat": [
+                { "yield": 27641, "area": 6.85 },
+            ],
+            "maize": [
+                { "yield": 14722, "area": 1.98 },
+            ]
+        },
+        "420804": {
+            "paddy rice": [
+                { "yield": 68272, "area": 8.87 },
+            ],
+            "winter wheat": [
+                { "yield": 2535, "area": 0.44 },
+            ],
+            "maize": [
+                { "yield": 2550, "area": 0.50 },
+            ]
+        },
+        "420822": {
+            "paddy rice": [
+                { "yield": 529198, "area": 55.84 },
+            ],
+            "winter wheat": [
+                { "yield": 106985, "area": 23.62 },
+            ],
+            "maize": [
+                { "yield": 34201, "area": 5.59 },
+            ]
+        },
+        "420881": {
+            "paddy rice": [
+                { "yield": 528316, "area": 47.81 },
+            ],
+            "winter wheat": [
+                { "yield": 165244, "area": 37.18 },
+            ],
+            "maize": [
+                { "yield": 87236, "area": 16.36 },
+            ]
+        },
+        "420882": {
+            "paddy rice": [
+                { "yield": 411288, "area": 51.39 },
+            ],
+            "winter wheat": [
+                { "yield": 128516, "area": 37.95 },
+            ],
+            "maize": [
+                { "yield": 69126, "area": 10.47 },
+            ]
+        }
+    };
+
+    const cityData2018 = {
+        "420802": {
+            "paddy rice": [
+                { "yield": 123300, "area": 15.59 },
+            ],
+            "winter wheat": [
+                { "yield": 16251, "area": 5.44 },
+            ],
+            "maize": [
+                { "yield": 11560, "area": 2.67 },
+            ]
+        },
+        "420804": {
+            "paddy rice": [
+                { "yield": 124970, "area": 14.76 },
+            ],
+            "winter wheat": [
+                { "yield": 3124, "area": 0.99 },
+            ],
+            "maize": [
+                { "yield": 6100, "area": 1.35 },
+            ]
+        },
+        "420822": {
+            "paddy rice": [
+                { "yield": 710360, "area": 80.55 },
+            ],
+            "winter wheat": [
+                { "yield": 59158, "area": 18.41 },
+            ],
+            "maize": [
+                { "yield": 18995, "area": 4.46 },
+            ]
+        },
+        "420881": {
+            "paddy rice": [
+                { "yield": 625300, "area": 68.35 },
+            ],
+            "winter wheat": [
+                { "yield": 182368, "area": 56.27 },
+            ],
+            "maize": [
+                { "yield": 138100, "area": 30.99 },
+            ]
+        },
+        "420882": {
+            "paddy rice": [
+                { "yield": 515300, "area": 63.24 },
+            ],
+            "winter wheat": [
+                { "yield": 93936, "area": 29.31 },
+            ],
+            "maize": [
+                { "yield": 56190, "area": 12.28 },
+            ]
+        }
+    };
+
+    const cityData2019 = {
+        "420802": {
+            "paddy rice": [
+                { "yield": 116700, "area": 14.99 },
+            ],
+            "winter wheat": [
+                { "yield": 16550, "area": 5.19 },
+            ],
+            "maize": [
+                { "yield": 10750, "area": 2.39 },
+            ]
+        },
+        "420804": {
+            "paddy rice": [
+                { "yield": 120600, "area": 14.19 },
+            ],
+            "winter wheat": [
+                { "yield": 1696, "area": 0.53 },
+            ],
+            "maize": [
+                { "yield": 5750, "area": 1.21 },
+            ]
+        },
+        "420822": {
+            "paddy rice": [
+                { "yield": 690289, "area": 78.05 },
+            ],
+            "winter wheat": [
+                { "yield": 58984, "area": 17.93 },
+            ],
+            "maize": [
+                { "yield": 17680, "area": 4.13 },
+            ]
+        },
+        "420881": {
+            "paddy rice": [
+                { "yield": 606100, "area": 66.34 },
+            ],
+            "winter wheat": [
+                { "yield": 182368, "area": 56.27 },
+            ],
+            "maize": [
+                { "yield": 131200, "area": 28.93 },
+            ]
+        },
+        "420882": {
+            "paddy rice": [
+                { "yield": 496641, "area": 60.59 },
+            ],
+            "winter wheat": [
+                { "yield": 93127, "area": 28.61 },
+            ],
+            "maize": [
+                { "yield": 53500, "area": 11.43 },
+            ]
+        }
+    };
+
+    const cityData2020 = {
+        "420802": {
+            "paddy rice": [
+                { "yield": 118787, "area": 15.51 },
+            ],
+            "winter wheat": [
+                { "yield": 11200, "area": 3.48 },
+            ],
+            "maize": [
+                { "yield": 13100, "area": 3.10 },
+            ]
+        },
+        "420804": {
+            "paddy rice": [
+                { "yield": 122300, "area": 14.60 },
+            ],
+            "winter wheat": [
+                { "yield": 900, "area": 0.27 },
+            ],
+            "maize": [
+                { "yield": 4081, "area": 0.87 },
+            ]
+        },
+        "420822": {
+            "paddy rice": [
+                { "yield": 779242, "area": 88.89 },
+            ],
+            "winter wheat": [
+                { "yield": 86900, "area": 25.96 },
+            ],
+            "maize": [
+                { "yield": 18989, "area": 4.56 },
+            ]
+        },
+        "420881": {
+            "paddy rice": [
+                { "yield": 612100, "area": 67.91 },
+            ],
+            "winter wheat": [
+                { "yield": 185700, "area": 56.76 },
+            ],
+            "maize": [
+                { "yield": 122200, "area": 28.05 },
+            ]
+        },
+        "420882": {
+            "paddy rice": [
+                { "yield": 489528, "area": 59.70 },
+            ],
+            "winter wheat": [
+                { "yield": 94400, "area": 28.79 },
+            ],
+            "maize": [
+                { "yield": 53740, "area": 11.82 },
+            ]
+        }
+    };
+
+    let currentCityData = cityData2016;
+    let currentChart = null;
+
+    map.on('style.load', () => {
+        // Load city data
+        fetch('https://geo.datav.aliyun.com/areas_v3/bound/420800_full.json')
+            .then(response => response.json())
+            .then(data => {
+                map.addSource('urban-areas', {
+                    'type': 'geojson',
+                    'data': data
+                });
+
+                map.addLayer({
+                    'id': 'urban-areas-fill',
+                    'type': 'fill',
+                    'source': 'urban-areas',
+                    'paint': {
+                        'fill-color': '#f08',
+                        'fill-opacity': 0.4
+                    }
+                }, 'waterway-label'); // Add city layer below other layers
+
+                map.addLayer({
+                    'id': 'city-boundary',
+                    'type': 'line',
+                    'source': 'urban-areas',
+                    'filter': ['==', 'level', 'district'],
+                    'paint': {
+                        'line-color': '#FF0000',
+                        'line-width': 2
+                    }
+                });
+
+                // Add the initial layers for the first year
+                addLayers('2016');
+            });
+
+        document.getElementById('slider').addEventListener('input', (e) => {
+            const year = e.target.value;
+            updateLayers(year);
+            updateChart(year);
+            currentCityData = year === '2020' ? cityData2020 : year === '2019' ? cityData2019 : year === '2018' ? cityData2018 : year === '2017' ? cityData2017 : cityData2016;
+            if (currentChart) {
+                currentChart.change(currentCityData[currentChart.adcode]);
+            }
+        });
+
+        document.getElementById('layer1').addEventListener('change', (e) => {
+            toggleLayerVisibility('玉米', e.target.checked);
+        });
+
+        document.getElementById('layer2').addEventListener('change', (e) => {
+            toggleLayerVisibility('水稻', e.target.checked);
+        });
+
+        document.getElementById('layer3').addEventListener('change', (e) => {
+            toggleLayerVisibility('小麦', e.target.checked);
+        });
+
+        document.getElementById('toggle-city-layer').addEventListener('click', () => {
+            const visibility = map.getLayoutProperty('urban-areas-fill', 'visibility') === 'visible' ? 'none' : 'visible';
+            map.setLayoutProperty('urban-areas-fill', 'visibility', visibility);
+            map.setLayoutProperty('city-boundary', 'visibility', visibility);
+        });
+
+        // 添加Tileset数据源和图层
+        map.addSource('my-tileset', {
+            'type': 'vector',
+            'url': 'mapbox://ask345.775pt8gb' // 你的Tileset ID
+        });
+
+        map.addLayer({
+            'id': 'tileset-layer',
+            'type': 'circle',
+            'source': 'my-tileset',
+            'source-layer': 'shuidaopoints-b4xrad', // 替换为你的Tileset中的源图层名称
+            'paint': {
+                'circle-radius': 5,
+                'circle-color': '#00ff00' // 设置点的颜色为绿色
+            }
+        });
+
+        // 创建一个Popup实例
+        var popup = new mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false
+        });
+
+        // 添加鼠标移入事件以显示"key"属性
+        map.on('mouseenter', 'tileset-layer', function (e) {
+            // 更改鼠标指针样式
+            map.getCanvas().style.cursor = 'pointer';
+
+            // 获取点的坐标和"key"属性
+            var coordinates = e.features[0].geometry.coordinates.slice();
+            var key = e.features[0].properties.key;
+
+            // 设置Popup内容并显示
+            popup.setLngLat(coordinates)
+                .setHTML('<strong>' + key + '</strong>')
+                .addTo(map);
+        });
+
+        // 添加鼠标移出事件以隐藏Popup
+        map.on('mouseleave', 'tileset-layer', function () {
+            map.getCanvas().style.cursor = '';
+            popup.remove();
+        });
+
+        // 添加按钮点击事件以切换Tileset图层的显隐
+        document.getElementById('toggle-tileset-layer').addEventListener('click', () => {
+            const visibility = map.getLayoutProperty('tileset-layer', 'visibility') === 'visible' ? 'none' : 'visible';
+            map.setLayoutProperty('tileset-layer', 'visibility', visibility);
+        });
+
+        // 添加新的GeoJSON数据源和图层
+        map.addSource('new-geojson', {
+            'type': 'vector',
+            'url': 'mapbox://ask345.7hhdozev' // 你的新的GeoJSON Tileset ID
+        });
+
+        map.addLayer({
+            'id': 'geojson-layer',
+            'type': 'circle',
+            'source': 'new-geojson',
+            'source-layer': 'winterwheatpoints-d9jami', // 替换为你的新的GeoJSON Tileset中的源图层名称
+            'paint': {
+                'circle-radius': 5,
+                'circle-color': '#ffff00' // 设置点的颜色为黄色
+            }
+        });
+
+        // 创建一个新的Popup实例
+        var geojsonPopup = new mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false
+        });
+
+        // 添加鼠标移入事件以显示"key"属性
+        map.on('mouseenter', 'geojson-layer', function (e) {
+            // 更改鼠标指针样式
+            map.getCanvas().style.cursor = 'pointer';
+
+            // 获取点的坐标和"key"属性
+            var coordinates = e.features[0].geometry.coordinates.slice();
+            var key = e.features[0].properties.key;
+
+            // 设置Popup内容并显示
+            geojsonPopup.setLngLat(coordinates)
+                .setHTML('<strong>' + key + '</strong>')
+                .addTo(map);
+        });
+
+        // 添加鼠标移出事件以隐藏Popup
+        map.on('mouseleave', 'geojson-layer', function () {
+            map.getCanvas().style.cursor = '';
+            geojsonPopup.remove();
+        });
+
+        // 添加按钮点击事件以切换新的GeoJSON图层的显隐
+        document.getElementById('toggle-geojson-layer').addEventListener('click', () => {
+            const visibility = map.getLayoutProperty('geojson-layer', 'visibility') === 'visible' ? 'none' : 'visible';
+            map.setLayoutProperty('geojson-layer', 'visibility', visibility);
+        });
+
+        // 添加另一个新的GeoJSON数据源和图层
+        map.addSource('another-geojson', {
+            'type': 'vector',
+            'url': 'mapbox://ask345.brr8x79t' // 你的另一个新的GeoJSON Tileset ID
+        });
+
+        map.addLayer({
+            'id': 'geojson-layer2',
+            'type': 'circle',
+            'source': 'another-geojson',
+            'source-layer': 'maizepoints-c45amf', // 替换为你的另一个新的GeoJSON Tileset中的源图层名称
+            'paint': {
+                'circle-radius': 5,
+                'circle-color': '#ff0000' // 设置点的颜色为红色
+            }
+        });
+
+        // 创建一个新的Popup实例
+        var anotherGeojsonPopup = new mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false
+        });
+
+        // 添加鼠标移入事件以显示"key"属性
+        map.on('mouseenter', 'geojson-layer2', function (e) {
+            // 更改鼠标指针样式
+            map.getCanvas().style.cursor = 'pointer';
+
+            // 获取点的坐标和"key"属性
+            var coordinates = e.features[0].geometry.coordinates.slice();
+            var key = e.features[0].properties.key;
+
+            // 设置Popup内容并显示
+            anotherGeojsonPopup.setLngLat(coordinates)
+                .setHTML('<strong>' + key + '</strong>')
+                .addTo(map);
+        });
+
+        // 添加鼠标移出事件以隐藏Popup
+        map.on('mouseleave', 'geojson-layer2', function () {
+            map.getCanvas().style.cursor = '';
+            anotherGeojsonPopup.remove();
+        });
+
+        // 添加按钮点击事件以切换另一个新的GeoJSON图层的显隐
+        document.getElementById('toggle-geojson-layer2').addEventListener('click', () => {
+            const visibility = map.getLayoutProperty('geojson-layer2', 'visibility') === 'visible' ? 'none' : 'visible';
+            map.setLayoutProperty('geojson-layer2', 'visibility', visibility);
+        });
+    });
+
+    function createPieChart(width, height, data) {
+        const radius = Math.min(width, height) / 2;
+        const color = d3.scaleOrdinal()
+            .domain(["paddy rice", "winter wheat", "maize"])
+            .range(["green", "yellow", "red"]);
+
+        const svg = d3.create("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("viewBox", [-width / 2, -height / 2, width, height]);
+
+        const g = svg.append("g");
+
+        svg.call(d3.zoom().on("zoom", (event) => {
+            g.attr("transform", event.transform);
+        }));
+
+        const arc = d3.arc()
+            .innerRadius(radius * 0.5)
+            .outerRadius(d => radius * 0.5 + d.data.yield / 10000);
+
+        const pie = d3.pie().sort(null).value(d => d.area);
+
+        const tooltip = d3.select('body').append('div')
+            .attr('class', 'tooltip')
+            .style('opacity', 0)
+            .style('display', 'none')
+            .style('z-index', 10000);
+
+        const combinedData = [
+            ...data["paddy rice"].map(d => ({ ...d, type: "paddy rice" })),
+            ...data["winter wheat"].map(d => ({ ...d, type: "winter wheat" })),
+            ...data["maize"].map(d => ({ ...d, type: "maize" }))
+        ];
+
+        const path = g.selectAll("path")
+            .data(pie(combinedData))
+            .enter().append("path")
+            .attr("fill", d => color(d.data.type))
+            .attr("d", arc)
+            .each(function(d) {
+                this._current = d;
+            })
+            .on('mouseover', function(event, d) {
+                tooltip.transition()
+                    .duration(200)
+                    .style('opacity', .9)
+                    .style('display', 'block');
+                tooltip.html(`Type: ${d.data.type}<br>Yield: ${d.data.yield} 吨<br>Area: ${d.data.area} 千公顷`)
+                    .style('left', (event.pageX + 5) + 'px')
+                    .style('top', (event.pageY - 28) + 'px');
+            })
+            .on('mouseout', function() {
+                tooltip.transition()
+                    .duration(500)
+                    .style('opacity', 0)
+                    .style('display', 'none');
+            });
+
+        function change(newData) {
+            const updatedData = [
+                ...newData["paddy rice"].map(d => ({ ...d, type: "paddy rice" })),
+                ...newData["winter wheat"].map(d => ({ ...d, type: "winter wheat" })),
+                ...newData["maize"].map(d => ({ ...d, type: "maize" }))
+            ];
+            const arcs = pie(updatedData);
+            path.data(arcs)
+                .transition()
+                .duration(750)
+                .attrTween("d", function(d) {
+                    const i = d3.interpolate(this._current, d);
+                    this._current = i(0);
+                    return t => arc(i(t));
+                });
+        }
+
+        return Object.assign(svg.node(), { change, adcode: data.adcode });
+    }
+
+    var currentChartContainer = null;
+    map.on('click', 'urban-areas-fill', function(e) {
+        if (currentChartContainer) {
+            currentChartContainer.remove();
+        }
+
+        const adcode = e.features[0].properties.adcode;
+        const citySpecificData = currentCityData[adcode];
+
+        var chartContainer = document.createElement('div');
+        chartContainer.id = 'chart-container';
+        chartContainer.style.position = 'absolute';
+        chartContainer.style.padding = '5px';
+        chartContainer.style.zIndex = '9999';
+        chartContainer.style.backgroundColor = 'transparent';  // Set background to transparent
+        chartContainer.style.border = 'none';  // Hide border
+
+        // 确保图表在地图容器范围内
+        const mapContainer = map.getContainer();
+        const containerWidth = mapContainer.clientWidth;
+        const containerHeight = mapContainer.clientHeight;
+
+        let chartX = e.point.x - 150; // 图表中心
+        let chartY = e.point.y - 150; // 图表中心
+
+        if (chartX < 0) {
+            chartX = 0;
+        }
+        if (chartY < 0) {
+            chartY = 0;
+        }
+        if (chartX + 300 > containerWidth) {
+            chartX = containerWidth - 300;
+        }
+        if (chartY + 300 > containerHeight) {
+            chartY = containerHeight - 300;
+        }
+
+        chartContainer.style.top = chartY + 'px';
+        chartContainer.style.left = chartX + 'px';
+
+        var chartSvg = createPieChart(300, 300, { ...citySpecificData, adcode });
+        chartContainer.appendChild(chartSvg);
+
+        document.body.appendChild(chartContainer);
+        currentChartContainer = chartContainer;
+        currentChart = chartSvg;
+    });
+
+    map.on('mousemove', 'urban-areas-fill', function() {
+        if (currentChartContainer) {
+            currentChartContainer.remove();
+            currentChartContainer = null;
+            currentChart = null;
+        }
+    });
+
+    map.on('mouseenter', 'urban-areas-fill', function () {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'urban-areas-fill', function () {
+        map.getCanvas().style.cursor = '';
+    });
+
+    function addLayers(year) {
+        Object.keys(layers[year]).forEach((key) => {
+            const checkbox = document.getElementById(`layer${getLayerIndex(key)}`);
+            if (checkbox.checked) {
+                if (!map.getLayer(`${key}-${year}`)) {
+                    map.addLayer({
+                        id: `${key}-${year}`,
+                        type: 'raster',
+                        source: {
+                            type: 'raster',
+                            tiles: [layers[year][key]],
+                            tileSize: 256
+                        },
+                        paint: {
+                            'raster-color': layerColors[key]
+                        }
+                    });
+                } else {
+                    map.setLayoutProperty(`${key}-${year}`, 'visibility', 'visible');
+                }
+            }
+        });
+    }
+
+    function removeLayers(year) {
+        Object.keys(layers[year]).forEach((key) => {
+            if (map.getLayer(`${key}-${year}`)) {
+                map.setLayoutProperty(`${key}-${year}`, 'visibility', 'none');
+            }
+        });
+    }
+
+    function updateLayers(year) {
+        // Remove all layers for previous years
+        Object.keys(layers).forEach(y => {
+            if (y !== year) {
+                removeLayers(y);
+            }
+        });
+        // Add layers for the selected year
+        addLayers(year);
+    }
+
+    function toggleLayerVisibility(layerName, visibility) {
+        const year = document.getElementById('slider').value;
+        const layerId = `${layerName}-${year}`;
+        if (map.getLayer(layerId)) {
+            map.setLayoutProperty(layerId, 'visibility', visibility ? 'visible' : 'none');
+        } else if (visibility) {
+            addLayers(year);
+        }
+    }
+
+    function getLayerIndex(layerName) {
+        switch (layerName) {
+            case '玉米': return 1;
+            case '水稻': return 2;
+            case '小麦': return 3;
+        }
+    }
+
+    // Handle sidebar toggle
+    document.getElementById('toggle-sidebar').addEventListener('click', () => {
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('open');
+    });
+
+    // Data for the 2016 plot
+    const a2016 = [0.272685005484445, 0.323728547410985, 0.390216072169694, 0.685442397199766, 1];
+    const b2016 = [0.327777460895176, 0.384749804885335, 0.457253288872526, 0.728509151955971, 1];
+    const c2016 = [0.0123520401710643, 0.216111519670987, 0.278912265651505, 0.641664363638067, 1];
+    const d2016 = [0.0569723439901584, 0.328463192034187, 0.400966676021379, 0.728744136916555, 1];
+    const e2016 = [0.0149119541195016, 0.171437963894456, 0.227622167124785, 0.536691724558583, 1];
+    const f2016 = [0.0569723439901584, 0.328463192034187, 0.400966676021379, 0.672222539104824, 1];
+
+    const x2016 = Array.from({length: 100}, (_, i) => Math.min(...b2016, ...d2016, ...f2016) + i * (Math.max(...b2016, ...d2016, ...f2016) - Math.min(...b2016, ...d2016, ...f2016)) / 99);
+    const y2016 = x2016;
+
+    const trace1_2016 = {
+        x: b2016,
+        y: a2016,
+        mode: 'lines+markers',
+        name: 'paddy rice'
+    };
+
+    const trace2_2016 = {
+        x: d2016,
+        y: c2016,
+        mode: 'lines+markers',
+        name: 'winter wheat'
+    };
+
+    const trace3_2016 = {
+        x: f2016,
+        y: e2016,
+        mode: 'lines+markers',
+        name: 'maize'
+    };
+
+    const trace4_2016 = {
+        x: x2016,
+        y: y2016,
+        mode: 'lines',
+        name: 'y=x',
+        line: {
+            dash: 'dash'
+        }
+    };
+
+    const data2016 = [trace1_2016, trace2_2016, trace3_2016, trace4_2016];
+
+    const layout2016 = {
+        title: '2016 Lorenz Curve',
+        xaxis: {
+            title: 'Cumulative percentage of land area'
+        },
+        yaxis: {
+            title: 'Cumulative percentage of area by category'
+        }
+    };
+
+    // Data for the 2017 plot
+    const a2017 = [0.0643019156141899, 0.11640007862933, 0.45063399885876, 0.693249704165286, 1];
+    const b2017 = [0.0957661566631685, 0.156248951786529, 0.538474198767135, 0.768226573759256, 1];
+    const c2017 = [0.00518141862711269, 0.0267114610259308, 0.162647770075719, 0.460701469900742, 1];
+    const d2017 = [0.0604827951233608, 0.156248951786529, 0.388022378027273, 0.617774753019394, 1];
+    const e2017 = [0.0813614184697813, 0.40699580304147, 0.603403190143188, 0.667944676684866, 1];
+    const f2017 = [0.0957661566631685, 0.477991403643774, 0.707743778635895, 0.768226573759256, 1];
+
+    const x2017 = Array.from({length: 100}, (_, i) => Math.min(...b2017, ...d2017, ...f2017) + i * (Math.max(...b2017, ...d2017, ...f2017) - Math.min(...b2017, ...d2017, ...f2017)) / 99);
+    const y2017 = x2017;
+
+    const trace1_2017 = {
+        x: b2017,
+        y: a2017,
+        mode: 'lines+markers',
+        name: 'paddy rice'
+    };
+
+    const trace2_2017 = {
+        x: d2017,
+        y: c2017,
+        mode: 'lines+markers',
+        name: 'winter wheat'
+    };
+
+    const trace3_2017 = {
+        x: f2017,
+        y: e2017,
+        mode: 'lines+markers',
+        name: 'maize'
+    };
+
+    const trace4_2017 = {
+        x: x2017,
+        y: y2017,
+        mode: 'lines',
+        name: 'y=x',
+        line: {
+            dash: 'dash'
+        }
+    };
+
+    const data2017 = [trace1_2017, trace2_2017, trace3_2017, trace4_2017];
+
+    const layout2017 = {
+        title: '2017 Lorenz Curve',
+        xaxis: {
+            title: 'Cumulative percentage of land area'
+        },
+        yaxis: {
+            title: 'Cumulative percentage of area by category'
+        }
+    };
+
+    // Data for the 2018 plot
+    const a2018 = [0.0665387567236791, 0.380460085087965, 0.437061451037762, 0.679859697780193, 1];
+    const b2018 = [0.0968299226851957, 0.47916346355669, 0.539400678912193, 0.768808377457035, 1];
+    const c2018 = [0.00955852004088736, 0.0376227077188662, 0.201855365592812, 0.68367732380576, 1];
+    const d2018 = [0.0602372153555029, 0.157067138040699, 0.388258760583663, 0.770592301455157, 1];
+    const e2018 = [0.0430766050009445, 0.360619903330181, 0.411911305166165, 0.671554075806416, 1];
+    const f2018 = [0.0968299226851957, 0.47916346355669, 0.539400678912193, 0.768808377457035, 1];
+
+    const x2018 = Array.from({length: 100}, (_, i) => Math.min(...b2018, ...d2018, ...f2018) + i * (Math.max(...b2018, ...d2018, ...f2018) - Math.min(...b2018, ...d2018, ...f2018)) / 99);
+    const y2018 = x2018;
+
+    const trace1_2018 = {
+        x: b2018,
+        y: a2018,
+        mode: 'lines+markers',
+        name: 'paddy rice'
+    };
+
+    const trace2_2018 = {
+        x: d2018,
+        y: c2018,
+        mode: 'lines+markers',
+        name: 'winter wheat'
+    };
+
+    const trace3_2018 = {
+        x: f2018,
+        y: e2018,
+        mode: 'lines+markers',
+        name: 'maize'
+    };
+
+    const trace4_2018 = {
+        x: x2018,
+        y: y2018,
+        mode: 'lines',
+        name: 'y=x',
+        line: {
+            dash: 'dash'
+        }
+    };
+
+    const data2018 = [trace1_2018, trace2_2018, trace3_2018, trace4_2018];
+
+    const layout2018 = {
+        title: '2018 Lorenz Curve',
+        xaxis: {
+            title: 'Cumulative percentage of land area'
+        },
+        yaxis: {
+            title: 'Cumulative percentage of area by category'
+        }
+    };
+
+    // Data for the 2019 plot
+    const a2019 = [0.0565239906269448, 0.336834282916407, 0.393895359457947, 0.654734723151875, 1];
+    const b2019 = [0.097121044173523, 0.479053002832573, 0.539174588297542, 0.769060077853677, 1];
+    const c2019 = [0.0342641623105822, 0.090050229544307, 0.324150834109217, 0.565293478845063, 1];
+    const d2019 = [0.0601215854649692, 0.157242629638492, 0.388182551784815, 0.61806804134095, 1];
+    const e2019 = [0.0429173637156675, 0.348377244274628, 0.405964373260362, 0.655792575877665, 1];
+    const f2019 = [0.097121044173523, 0.479053002832573, 0.539174588297542, 0.769060077853677, 1];
+
+    const x2019 = Array.from({length: 100}, (_, i) => Math.min(...b2019, ...d2019, ...f2019) + i * (Math.max(...b2019, ...d2019, ...f2019) - Math.min(...b2019, ...d2019, ...f2019)) / 99);
+    const y2019 = x2019;
+
+    const trace1_2019 = {
+        x: b2019,
+        y: a2019,
+        mode: 'lines+markers',
+        name: 'paddy rice'
+    };
+
+    const trace2_2019 = {
+        x: d2019,
+        y: c2019,
+        mode: 'lines+markers',
+        name: 'winter wheat'
+    };
+
+    const trace3_2019 = {
+        x: f2019,
+        y: e2019,
+        mode: 'lines+markers',
+        name: 'maize'
+    };
+
+    const trace4_2019 = {
+        x: x2019,
+        y: y2019,
+        mode: 'lines',
+        name: 'y=x',
+        line: {
+            dash: 'dash'
+        }
+    };
+
+    const data2019 = [trace1_2019, trace2_2019, trace3_2019, trace4_2019];
+
+    const layout2019 = {
+        title: '2019 Lorenz Curve',
+        xaxis: {
+            title: 'Cumulative percentage of land area'
+        },
+        yaxis: {
+            title: 'Cumulative percentage of area by category'
+        }
+    };
+
+    // Data for the 2020 plot
+    const a2020 = [0.0658078874529048, 0.116253883618416, 0.495808671980401, 0.742959416248767, 1];
+    const b2020 = [0.097051914416007, 0.156888541981014, 0.537828517013791, 0.76909491788867, 1];
+    const c2020 = [0.0634497389158424, 0.10840319391283, 0.293209679593521, 0.490216812777251, 1];
+    const d2020 = [0.097051914416007, 0.156888541981014, 0.387793624092344, 0.619060024967223, 1];
+    const e2020 = [0.0370669633194975, 0.110881610665743, 0.290685688356836, 0.731478571892809, 1];
+    const f2020 = [0.0598366275650068, 0.156888541981014, 0.387793624092344, 0.768733599125121, 1];
+
+    const x2020 = Array.from({length: 100}, (_, i) => Math.min(...b2020, ...d2020, ...f2020) + i * (Math.max(...b2020, ...d2020, ...f2020) - Math.min(...b2020, ...d2020, ...f2020)) / 99);
+    const y2020 = x2020;
+
+    const trace1_2020 = {
+        x: b2020,
+        y: a2020,
+        mode: 'lines+markers',
+        name: 'paddy rice'
+    };
+
+    const trace2_2020 = {
+        x: d2020,
+        y: c2020,
+        mode: 'lines+markers',
+        name: 'winter wheat'
+    };
+
+    const trace3_2020 = {
+        x: f2020,
+        y: e2020,
+        mode: 'lines+markers',
+        name: 'maize'
+    };
+
+    const trace4_2020 = {
+        x: x2020,
+        y: y2020,
+        mode: 'lines',
+        name: 'y=x',
+        line: {
+            dash: 'dash'
+        }
+    };
+
+    const data2020 = [trace1_2020, trace2_2020, trace3_2020, trace4_2020];
+
+    const layout2020 = {
+        title: '2020 Lorenz Curve',
+        xaxis: {
+            title: 'Cumulative percentage of land area'
+        },
+        yaxis: {
+            title: 'Cumulative percentage of area by category'
+        }
+    };
+
+    // Initial plot
+    Plotly.newPlot('chart', data2016, layout2016);
+
+    function updateChart(year) {
+        if (year == 2016) {
+            Plotly.newPlot('chart', data2016, layout2016);
+            document.getElementById('sidebar-header').innerText = '2016 Lorenz Curve';
+        } else if (year == 2017) {
+            Plotly.newPlot('chart', data2017, layout2017);
+            document.getElementById('sidebar-header').innerText = '2017 Lorenz Curve';
+        } else if (year == 2018) {
+            Plotly.newPlot('chart', data2018, layout2018);
+            document.getElementById('sidebar-header').innerText = '2018 Lorenz Curve';
+        } else if (year == 2019) {
+            Plotly.newPlot('chart', data2019, layout2019);
+            document.getElementById('sidebar-header').innerText = '2019 Lorenz Curve';
+        } else if (year == 2020) {
+            Plotly.newPlot('chart', data2020, layout2020);
+            document.getElementById('sidebar-header').innerText = '2020 Lorenz Curve';
+        }
+    }
+</script>
+
+</body>
+</html>
